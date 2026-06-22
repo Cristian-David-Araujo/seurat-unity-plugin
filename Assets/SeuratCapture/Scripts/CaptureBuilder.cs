@@ -1,4 +1,4 @@
-﻿/*
+/*
 Copyright 2017 Google Inc. All Rights Reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
@@ -20,8 +20,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
 using UnityEngine;
+#if UNITY_EDITOR
 using UnityEditor;
 using UnityEditor.SceneManagement;
+#endif
 using System.Collections.Generic;
 using System.IO;
 
@@ -458,9 +460,17 @@ public class CaptureBuilder {
 
     // Write out depth data
     string depth_image_name = base_image_name + "_Depth.exr";
+    // depth_camera_ is a standalone Camera created by CaptureBuilder with
+    // no UniversalAdditionalCameraData component. Unity's URP only manages
+    // cameras that carry that component; calling camera.Render() directly on
+    // a bare Camera bypasses the SRP loop and runs the built-in immediate-mode
+    // render path. This is exactly the same mechanism Unity uses for lightmap
+    // baking and reflection probe captures inside URP projects.
+    // SetReplacementShader therefore works correctly here in all pipelines.
     depth_camera_.SetReplacementShader(render_depth_shader_, "RenderType");
     depth_camera_.targetTexture = depth_render_texture_;
     depth_camera_.Render();
+    depth_camera_.ResetReplacementShader();
     WriteImage(depth_render_texture_, texture_fp32_, PathCombine(export_path, depth_image_name), false);
 
     // Record the capture results.
@@ -516,7 +526,16 @@ public class CaptureBuilder {
     int depth_bits = 24;
     // Note this reads in linear or sRGB depending on project settings.
     color_render_texture_ = new RenderTexture(resolution, resolution, depth_bits, RenderTargetFormatFromDynamicRange());
-    depth_render_texture_ = new RenderTexture(resolution, resolution, depth_bits, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
+    // Use RenderTextureDescriptor to avoid the deprecated RenderTextureReadWrite
+    // constructor parameter (obsolete since Unity 2022, warning in Unity 6).
+    var depth_desc_ = new RenderTextureDescriptor(resolution, resolution) {
+      colorFormat   = RenderTextureFormat.ARGBFloat,
+      depthBufferBits = depth_bits,
+      sRGB          = false,   // equivalent to RenderTextureReadWrite.Linear
+      useMipMap     = false,
+      msaaSamples   = 1,
+    };
+    depth_render_texture_ = new RenderTexture(depth_desc_);
     color_render_texture_.autoGenerateMips = false;
     depth_render_texture_.autoGenerateMips = false;
     texture_ = new Texture2D(resolution, resolution, TextureFormat.ARGB32, false);
