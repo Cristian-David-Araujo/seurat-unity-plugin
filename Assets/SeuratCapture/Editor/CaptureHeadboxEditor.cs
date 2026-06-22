@@ -1,4 +1,4 @@
-﻿/*
+/*
 Copyright 2017 Google Inc. All Rights Reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
@@ -151,8 +151,9 @@ class CaptureWindow : EditorWindow
       return;
     }
 
-    // Refresh the Editor GUI to finish the task.
-    EditorUtility.SetDirty(capture_notification_component_);
+    // Mark the scene dirty so Unity 6 correctly tracks unsaved changes.
+    // EditorUtility.SetDirty is not reliable for scene objects since Unity 2019+.
+    EditorSceneManager.MarkSceneDirty(capture_notification_component_.gameObject.scene);
 
     if (bake_stage_ == BakeStage.kCapture)
     {
