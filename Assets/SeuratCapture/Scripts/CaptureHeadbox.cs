@@ -1,4 +1,4 @@
-﻿/*
+/*
 Copyright 2017 Google Inc. All Rights Reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
@@ -57,7 +57,7 @@ public enum CaptureDynamicRange {
   kHDR = 2,
 }
 
-[ExecuteInEditMode]
+[ExecuteAlways]
 [RequireComponent(typeof(Camera))]
 public class CaptureHeadbox : MonoBehaviour {
   // -- Capture Settings --
@@ -99,9 +99,11 @@ public class CaptureHeadbox : MonoBehaviour {
       RunCapture();
     }
 
+#if ENABLE_LEGACY_INPUT_MANAGER
     if (Input.GetKeyDown(KeyCode.BackQuote)) {
       ToggleCaptureMode();
     }
+#endif
   }
 
   bool IsCapturing() {
