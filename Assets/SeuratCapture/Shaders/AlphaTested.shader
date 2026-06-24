@@ -60,7 +60,7 @@ Shader "GoogleVR/Seurat/AlphaTested"
 
 			struct Varyings
 			{
-				float2 uv          : TEXCOORD0_centroid;
+				centroid float2 uv : TEXCOORD0;
 				float4 positionHCS : SV_POSITION;
 			};
 
