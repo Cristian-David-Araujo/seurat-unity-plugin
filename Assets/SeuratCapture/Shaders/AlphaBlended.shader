@@ -28,7 +28,7 @@ Shader "GoogleVR/Seurat/AlphaBlended"
 	{
 		Tags { "RenderType"="Transparent" "Queue"="Transparent" "RenderPipeline"="UniversalPipeline" }
 		LOD 100
-		Blend SrcAlpha OneMinusSrcAlpha
+		Blend One OneMinusSrcAlpha
 		Cull Off
 		ZWrite Off
 		ZTest Always

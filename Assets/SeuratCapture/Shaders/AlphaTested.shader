@@ -29,7 +29,6 @@ Shader "GoogleVR/Seurat/AlphaTested"
 	{
 		Tags { "RenderType"="Opaque" "Queue"="Geometry" "RenderPipeline"="UniversalPipeline" }
 		LOD 100
-		Blend SrcAlpha OneMinusSrcAlpha
 		Cull Off
 		ZWrite On
 		ZTest LEqual
