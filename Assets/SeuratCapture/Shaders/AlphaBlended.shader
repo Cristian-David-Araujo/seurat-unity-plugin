@@ -56,7 +56,7 @@ Shader "GoogleVR/Seurat/AlphaBlended"
 
 			struct Varyings
 			{
-				float2 uv         : TEXCOORD0;
+				float2 uv         : TEXCOORD0_centroid;
 				float4 positionHCS : SV_POSITION;
 			};
 
