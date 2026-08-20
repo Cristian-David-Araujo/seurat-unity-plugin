@@ -17,6 +17,11 @@
 // IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 // CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+// The atlas Seurat writes is premultiplied unless it was baked with
+// -premultiply_alpha=false, so both SubShaders below blend
+// One OneMinusSrcAlpha. For a straight-alpha atlas -- what a Linear color space
+// project wants, see README-captura-seurat.md -- use
+// Seurat/AlphaBlendedLinearCorrect instead.
 Shader "GoogleVR/Seurat/AlphaBlended"
 {
 	Properties
@@ -31,7 +36,7 @@ Shader "GoogleVR/Seurat/AlphaBlended"
 		Blend One OneMinusSrcAlpha
 		Cull Off
 		ZWrite Off
-		ZTest Always
+		ZTest LEqual
 		Pass
 		{
 			Name "Forward"
@@ -82,10 +87,10 @@ Shader "GoogleVR/Seurat/AlphaBlended"
 	{
 		Tags { "RenderType"="Opaque" "Queue"="Transparent" }
 		LOD 100
-		Blend SrcAlpha OneMinusSrcAlpha
+		Blend One OneMinusSrcAlpha
 		Cull Off
 		ZWrite Off
-		ZTest Always
+		ZTest LEqual
 		Pass
 		{
 			CGPROGRAM
