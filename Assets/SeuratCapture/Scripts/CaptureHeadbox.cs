@@ -74,6 +74,12 @@ public class CaptureHeadbox : MonoBehaviour {
   [Tooltip("Capture in standard (SDR) or high dynamic range (HDR). HDR requires floating-point render targets, the Camera Component have allow HDR enabled, and enables EXR output.")]
   public CaptureDynamicRange dynamic_range_ = CaptureDynamicRange.kSDR;
 
+  [Tooltip("Renders the capture with multisampling and post-process antialiasing (FXAA/SMAA/TAA) turned off. Keep this enabled: Seurat treats alpha as binary and bakes every pixel as a point sample at its own depth, so a filtered silhouette pixel paints the near object's colour onto the surface behind it, and the object comes out outlined on that surface.")]
+  public bool suppress_camera_antialiasing_ = true;
+
+  [Tooltip("Also turns the camera's post-processing stack off during the capture. Bloom and similar effects spread a bright object's colour across its silhouette, which is the same defect antialiasing causes; leave this off only if you want the post-processed look baked into the atlas.")]
+  public bool suppress_camera_post_processing_ = false;
+
   // -- Processing Settings --
 
   [Tooltip("Root destination folder for capture data; empty instructs the capture to use an automatically-generated, unique folder in the project temp folder.")]

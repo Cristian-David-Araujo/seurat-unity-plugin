@@ -221,7 +221,11 @@ public class CaptureHeadboxEditor : Editor {
   SerializedProperty center_resolution_;
   SerializedProperty resolution_;
   SerializedProperty dynamic_range_;
+  SerializedProperty suppress_camera_antialiasing_;
+  SerializedProperty suppress_camera_post_processing_;
   SerializedProperty last_output_dir_;
+
+  bool show_bake_command_ = false;
 
   EditorBakeStatus capture_status_;
   CaptureWindow bake_progress_window_;
@@ -234,6 +238,10 @@ public class CaptureHeadboxEditor : Editor {
     center_resolution_ = serializedObject.FindProperty("center_resolution_");
     resolution_ = serializedObject.FindProperty("resolution_");
     dynamic_range_ = serializedObject.FindProperty("dynamic_range_");
+    suppress_camera_antialiasing_ =
+      serializedObject.FindProperty("suppress_camera_antialiasing_");
+    suppress_camera_post_processing_ =
+      serializedObject.FindProperty("suppress_camera_post_processing_");
     last_output_dir_ = serializedObject.FindProperty("last_output_dir_");
   }
 
@@ -258,6 +266,18 @@ public class CaptureHeadboxEditor : Editor {
       "Default Resolution"));
     EditorGUILayout.PropertyField(dynamic_range_, new GUIContent(
       "Dynamic Range"));
+    EditorGUILayout.PropertyField(suppress_camera_antialiasing_, new GUIContent(
+      "Suppress Antialiasing"));
+    if (!suppress_camera_antialiasing_.boolValue) {
+      EditorGUILayout.HelpBox(
+        "Antialiasing blends the colour of two surfaces into one pixel while " +
+        "that pixel keeps a single surface's depth. Seurat bakes it as a " +
+        "point sample, so the near object's colour lands on the surface " +
+        "behind it and shows up as an outline around the object.",
+        MessageType.Warning);
+    }
+    EditorGUILayout.PropertyField(suppress_camera_post_processing_,
+      new GUIContent("Suppress Post Processing"));
 
     EditorGUILayout.PropertyField(last_output_dir_, new GUIContent(
       "Last Output Folder"));
@@ -273,6 +293,8 @@ public class CaptureHeadboxEditor : Editor {
 
     serializedObject.ApplyModifiedProperties();
 
+    DrawBakeCommand((CaptureHeadbox)target);
+
     // Poll the bake status.
     if (bake_progress_window_ != null && bake_progress_window_.IsComplete()) {
       bake_progress_window_.Close();
@@ -285,6 +307,63 @@ public class CaptureHeadboxEditor : Editor {
       capture_builder_ = null;
       capture_status_ = null;
     }
+  }
+
+  // Shows the seurat command line that bakes the capture these settings
+  // produce, with the flag values measured in the blink-cuda fork. Nothing here
+  // runs the pipeline; it exists so the two halves of the workflow cannot
+  // drift, in particular the texture density, which has to be derived from the
+  // capture resolution and is silently clamped otherwise.
+  private void DrawBakeCommand(CaptureHeadbox headbox) {
+    show_bake_command_ = EditorGUILayout.Foldout(
+      show_bake_command_, "Seurat Bake Command", true);
+    if (!show_bake_command_) {
+      return;
+    }
+    string command = BuildBakeCommand(headbox);
+    EditorGUILayout.SelectableLabel(command, EditorStyles.textArea,
+      GUILayout.Height(EditorGUIUtility.singleLineHeight * 6f));
+    if (GUILayout.Button("Copy Bake Command")) {
+      EditorGUIUtility.systemCopyBuffer = command;
+    }
+    EditorGUILayout.HelpBox(
+      "A capture supplies " + (int)headbox.resolution_ + "/90 = " +
+      PixelsPerDegree(headbox) + " pixels per degree, and Seurat clamps " +
+      "-pixels_per_degree to what the atlas and the capture can actually " +
+      "hold: asking for more only turns the surplus atlas into inpainted " +
+      "filler. -premultiply_alpha=false is what a Linear-space Unity " +
+      "project needs (see README-import.md); -specular_filter_size widens " +
+      "the baker's view-dependent filter, which is the single biggest " +
+      "measured reduction of silhouette outlines.",
+      MessageType.Info);
+  }
+
+  private static int PixelsPerDegree(CaptureHeadbox headbox) {
+    // A cube face spans 90 degrees, so this is all the angular resolution the
+    // capture has. seurat/baker/texture_sizer.cc sizes the atlas in pixels per
+    // radian and clamps to what fits.
+    return Mathf.Max(1, (int)((int)headbox.resolution_ / 90));
+  }
+
+  private static string BuildBakeCommand(CaptureHeadbox headbox) {
+    string capture_dir = headbox.last_output_dir_;
+    if (string.IsNullOrEmpty(capture_dir)) {
+      capture_dir = headbox.output_folder_;
+    }
+    if (string.IsNullOrEmpty(capture_dir)) {
+      capture_dir = "<capture folder>";
+    }
+    return
+      "seurat" +
+      " -input_path=" + capture_dir + "/manifest.json" +
+      " -output_path=" + capture_dir + "/scene" +
+      " -cache_path=" + capture_dir + "/cache" +
+      " -premultiply_alpha=false" +
+      " -specular_filter_size=2.0" +
+      " -overdraw_factor=2" +
+      " -pixels_per_degree=" + PixelsPerDegree(headbox) +
+      " -texture_width=8192 -texture_height=8192" +
+      " -triangle_count=144000";
   }
 
   public void Capture() {

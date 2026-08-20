@@ -6,9 +6,10 @@
 // (overlap "patches"), while un-premultiplying in the shader over-brightens
 // bilinear-filtered silhouette edges (bright rims).
 //
-// The clean fix is straight (non-premultiplied) alpha: the atlas here has been
-// un-premultiplied and its color dilated into transparent texels (see
-// tools/... offline step), so a normal sRGB import + straight-alpha blend
+// The clean fix is straight (non-premultiplied) alpha: bake with
+// -premultiply_alpha=false, or un-premultiply the atlas and dilate its color
+// into the transparent texels once (both covered in
+// README-captura-seurat.md), so a normal sRGB import + straight-alpha blend
 // (SrcAlpha, OneMinusSrcAlpha) accumulates correctly in linear space with no
 // patches and no bright edges. No per-pixel color math needed.
 //
