@@ -1,4 +1,4 @@
-﻿// Copyright 2017 Google Inc. All Rights Reserved.
+// Copyright 2017 Google Inc. All Rights Reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy of
 // this software and associated documentation files (the "Software"), to deal in
@@ -24,6 +24,64 @@ Shader "GoogleVR/Seurat/AlphaTested"
 		_MainTex ("Texture", 2D) = "white" {}
 		_AlphaCutoff ("Alpha Cutoff", Range (0.01, 0.99)) = 0.25
 	}
+	// URP SubShader - used automatically when the project uses Universal Render Pipeline (Unity 6 / Meta VR)
+	SubShader
+	{
+		Tags { "RenderType"="Opaque" "Queue"="Geometry" "RenderPipeline"="UniversalPipeline" }
+		LOD 100
+		Cull Off
+		ZWrite On
+		ZTest LEqual
+
+		Pass
+		{
+			Name "Forward"
+			Tags { "LightMode" = "UniversalForward" }
+			AlphaToMask On
+			HLSLPROGRAM
+			#pragma vertex vert
+			#pragma fragment frag
+			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+
+			TEXTURE2D(_MainTex);
+			SAMPLER(sampler_MainTex);
+
+			CBUFFER_START(UnityPerMaterial)
+				float4 _MainTex_ST;
+				half _AlphaCutoff;
+			CBUFFER_END
+
+			struct Attributes
+			{
+				float4 positionOS : POSITION;
+				float2 uv         : TEXCOORD0;
+			};
+
+			struct Varyings
+			{
+				centroid float2 uv : TEXCOORD0;
+				float4 positionHCS : SV_POSITION;
+			};
+
+			Varyings vert(Attributes v)
+			{
+				Varyings o;
+				o.positionHCS = TransformObjectToHClip(v.positionOS.xyz);
+				o.uv = TRANSFORM_TEX(v.uv, _MainTex);
+				return o;
+			}
+
+			float4 frag(Varyings i) : SV_Target
+			{
+				float4 col = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i.uv);
+				clip(col.a - _AlphaCutoff);
+				return col;
+			}
+			ENDHLSL
+		}
+	}
+
+	// Built-in Render Pipeline fallback (legacy / non-URP projects)
 	SubShader
 	{
 		Tags { "RenderType"="Opaque" "Queue"="Geometry" }

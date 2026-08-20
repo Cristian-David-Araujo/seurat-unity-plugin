@@ -1,4 +1,4 @@
-﻿/*
+/*
 Copyright 2017 Google Inc. All Rights Reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
@@ -20,8 +20,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
 using UnityEngine;
+#if UNITY_EDITOR
 using UnityEditor;
 using UnityEditor.SceneManagement;
+#endif
 using System.Collections.Generic;
 using System.IO;
 
@@ -88,6 +90,19 @@ public class CaptureBuilder {
   // Receives status reports as the capture progresses and provides cancellation
   // signal.
   CaptureStatus status_interface_;
+
+  // -- Camera state saved around each captured sample. --
+
+  bool original_allow_msaa_;
+  bool original_allow_dynamic_resolution_;
+  bool original_use_physical_properties_;
+  float original_focal_length_;
+  // Per-render-pipeline camera components (URP's UniversalAdditionalCameraData,
+  // HDRP's HDAdditionalCameraData) whose antialiasing and post-processing are
+  // suppressed during the capture, plus the values to put back.
+  List<Component> pipeline_camera_data_ = new List<Component>();
+  List<object> original_pipeline_antialiasing_ = new List<object>();
+  List<object> original_pipeline_post_processing_ = new List<object>();
 
   // Per frame or per sample capture output path.
   string export_path_;
@@ -197,16 +212,22 @@ public class CaptureBuilder {
       samples.Add(headbox_position);
     }
 
-    // Sort samples by distance from center of the headbox.
+    // Sort samples by distance from center of the headbox. Note the distance
+    // has to be measured against the headbox and not against the world origin:
+    // the samples are already in world space here, so comparing sqrMagnitude
+    // ranked them by distance to the origin, and for any headbox not sitting
+    // there the sample replaced below by the exact centre was an arbitrary one
+    // instead of the one closest to it.
+    Vector3 headbox_center = headbox.transform.position;
     samples.Sort(delegate (Vector3 a, Vector3 b) {
-      float length_a = a.sqrMagnitude;
-      float length_b = b.sqrMagnitude;
+      float length_a = (a - headbox_center).sqrMagnitude;
+      float length_b = (b - headbox_center).sqrMagnitude;
       return length_a.CompareTo(length_b);
     });
     // Replace the sample closest to the center of the headbox with a sample at
     // exactly the center. This is important because Seurat requires
     // sampling information at the center of the headbox.
-    samples[0] = headbox.transform.position;
+    samples[0] = headbox_center;
 
     samples_ = samples;
     // Note this uses a modified version of Unity's standard internal depth
@@ -262,14 +283,22 @@ public class CaptureBuilder {
     float original_aspect = color_camera_.aspect;
     float original_fov = color_camera_.fieldOfView;
     int original_culling_mask = color_camera_.cullingMask;
+    Rect original_rect = color_camera_.rect;
 
     if (color_render_texture_ == null) {
       BuildRenderTargets();
     }
 
+    SuppressCameraFiltering();
+
     color_camera_.targetTexture = color_render_texture_;
     color_camera_.fieldOfView = 90f;
     color_camera_.aspect = 1f;
+    // A cube face is the whole render target. A camera with a partial viewport
+    // rect, or one driven by physical lens properties (which override
+    // fieldOfView and can add lens shift), would not produce the 90-degree
+    // centred frustum the six faces have to tile.
+    color_camera_.rect = new Rect(0f, 0f, 1f, 1f);
     // Propagate settings to the depth camera.
     depth_camera_.CopyFrom(color_camera_);
     depth_camera_.allowHDR = IsHighDynamicRange();
@@ -278,6 +307,16 @@ public class CaptureBuilder {
     depth_camera_.clearFlags = CameraClearFlags.Color;
     depth_camera_.backgroundColor = new Color(0f, 0f, 0f, 0f);
 
+    // Objects on the "SeuratProxy" layer are depth-only stand-ins (e.g. an
+    // opaque mesh aligned to a gaussian splat, which cannot write depth in
+    // the replacement-shader pass). Hide them from color, keep them in depth.
+    // The color camera's mask is restored after the capture (see below).
+    int proxy_layer = LayerMask.NameToLayer("SeuratProxy");
+    if (proxy_layer >= 0) {
+      color_camera_.cullingMask &= ~(1 << proxy_layer);
+      depth_camera_.cullingMask |= (1 << proxy_layer);
+    }
+
     CaptureSample();
 
     color_camera_.ResetReplacementShader();
@@ -285,6 +324,112 @@ public class CaptureBuilder {
     color_camera_.aspect = original_aspect;
     color_camera_.fieldOfView = original_fov;
     color_camera_.cullingMask = original_culling_mask;
+    color_camera_.rect = original_rect;
+    RestoreCameraFiltering();
+  }
+
+  // Turns off every form of edge filtering the color camera may apply, saving
+  // what RestoreCameraFiltering() has to put back.
+  //
+  // This matters more than it looks. Seurat treats alpha as binary
+  // (ingest/ldi_loader.cc) and bakes each pixel as a point sample at its own
+  // depth, while MSAA resolves color by averaging the subsamples and depth by
+  // keeping one of them. A silhouette pixel then carries a blend of the near
+  // and the far surface at a single surface's distance, and the near object's
+  // color is deposited onto the far surface: the object ends up outlined on
+  // the wall behind it. Post-process antialiasing (FXAA/SMAA/TAA) blends the
+  // same edges after the fact, and TAA additionally mixes in earlier frames.
+  //
+  // Measured on the blink-cuda glTF path, where the same defect came from
+  // pyrender's 4x MSAA: 0.48 % of pixels carried a color belonging to a
+  // different surface than their depth, and re-baking with the color fixed and
+  // the geometry held identical changed 2.00 % of atlas texels, 3.65x
+  // concentrated within one texel of a silhouette edge. Antialiasing is not
+  // worth keeping in a capture anyway -- Seurat resamples every view with its
+  // own pixel filter, so per-pixel AA is discarded on the surfaces and harmful
+  // on the silhouettes. Raise the capture resolution for detail instead.
+  private void SuppressCameraFiltering() {
+    original_allow_msaa_ = color_camera_.allowMSAA;
+    original_allow_dynamic_resolution_ = color_camera_.allowDynamicResolution;
+    original_use_physical_properties_ = color_camera_.usePhysicalProperties;
+    original_focal_length_ = color_camera_.focalLength;
+    pipeline_camera_data_.Clear();
+    original_pipeline_antialiasing_.Clear();
+    original_pipeline_post_processing_.Clear();
+
+    if (!headbox_.suppress_camera_antialiasing_) {
+      return;
+    }
+
+    color_camera_.allowMSAA = false;
+    color_camera_.allowDynamicResolution = false;
+    color_camera_.usePhysicalProperties = false;
+
+    // Reached by reflection: the additional-camera-data components belong to
+    // the URP and HDRP packages, and this file has to compile in projects that
+    // have neither installed. Both packages spell the settings the same way,
+    // an |antialiasing| enum whose None is 0 and a bool
+    // |renderPostProcessing|.
+    foreach (Component component in color_camera_.GetComponents<Component>()) {
+      if (component == null ||
+          !component.GetType().Name.EndsWith("AdditionalCameraData")) {
+        continue;
+      }
+      System.Reflection.PropertyInfo antialiasing =
+        component.GetType().GetProperty("antialiasing");
+      System.Reflection.PropertyInfo post_processing =
+        component.GetType().GetProperty("renderPostProcessing");
+      object saved_antialiasing = null;
+      object saved_post_processing = null;
+      if (antialiasing != null && antialiasing.CanRead && antialiasing.CanWrite &&
+          antialiasing.PropertyType.IsEnum) {
+        saved_antialiasing = antialiasing.GetValue(component, null);
+        antialiasing.SetValue(
+          component, System.Enum.ToObject(antialiasing.PropertyType, 0), null);
+      }
+      if (headbox_.suppress_camera_post_processing_ && post_processing != null &&
+          post_processing.CanRead && post_processing.CanWrite &&
+          post_processing.PropertyType == typeof(bool)) {
+        saved_post_processing = post_processing.GetValue(component, null);
+        post_processing.SetValue(component, false, null);
+      }
+      if (saved_antialiasing == null && saved_post_processing == null) {
+        continue;
+      }
+      pipeline_camera_data_.Add(component);
+      original_pipeline_antialiasing_.Add(saved_antialiasing);
+      original_pipeline_post_processing_.Add(saved_post_processing);
+    }
+  }
+
+  private void RestoreCameraFiltering() {
+    color_camera_.allowMSAA = original_allow_msaa_;
+    color_camera_.allowDynamicResolution = original_allow_dynamic_resolution_;
+    color_camera_.usePhysicalProperties = original_use_physical_properties_;
+    if (original_use_physical_properties_) {
+      // fieldOfView and focalLength are two views of one value, and the
+      // capture drove the first, so put the second back verbatim rather than
+      // leaving a physical camera with a re-derived focal length.
+      color_camera_.focalLength = original_focal_length_;
+    }
+
+    for (int i = 0; i < pipeline_camera_data_.Count; ++i) {
+      Component component = pipeline_camera_data_[i];
+      if (component == null) {
+        continue;
+      }
+      if (original_pipeline_antialiasing_[i] != null) {
+        component.GetType().GetProperty("antialiasing").SetValue(
+          component, original_pipeline_antialiasing_[i], null);
+      }
+      if (original_pipeline_post_processing_[i] != null) {
+        component.GetType().GetProperty("renderPostProcessing").SetValue(
+          component, original_pipeline_post_processing_[i], null);
+      }
+    }
+    pipeline_camera_data_.Clear();
+    original_pipeline_antialiasing_.Clear();
+    original_pipeline_post_processing_.Clear();
   }
 
   private void CaptureSample()
@@ -458,9 +603,26 @@ public class CaptureBuilder {
 
     // Write out depth data
     string depth_image_name = base_image_name + "_Depth.exr";
-    depth_camera_.SetReplacementShader(render_depth_shader_, "RenderType");
-    depth_camera_.targetTexture = depth_render_texture_;
-    depth_camera_.Render();
+    // Camera.SetReplacementShader is a Built-in pipeline feature; URP ignores
+    // it and renders the normal color pass instead. Temporarily disable the
+    // SRP so the depth camera renders through the Built-in path with the
+    // CaptureEyeDepth replacement shader (which replaces every material by
+    // RenderType tag, so URP materials never execute and cannot break).
+    UnityEngine.Rendering.RenderPipelineAsset previous_default_pipeline =
+      UnityEngine.Rendering.GraphicsSettings.defaultRenderPipeline;
+    UnityEngine.Rendering.RenderPipelineAsset previous_quality_pipeline =
+      QualitySettings.renderPipeline;
+    UnityEngine.Rendering.GraphicsSettings.defaultRenderPipeline = null;
+    QualitySettings.renderPipeline = null;
+    try {
+      depth_camera_.SetReplacementShader(render_depth_shader_, "RenderType");
+      depth_camera_.targetTexture = depth_render_texture_;
+      depth_camera_.Render();
+      depth_camera_.ResetReplacementShader();
+    } finally {
+      UnityEngine.Rendering.GraphicsSettings.defaultRenderPipeline = previous_default_pipeline;
+      QualitySettings.renderPipeline = previous_quality_pipeline;
+    }
     WriteImage(depth_render_texture_, texture_fp32_, PathCombine(export_path, depth_image_name), false);
 
     // Record the capture results.
@@ -516,7 +678,22 @@ public class CaptureBuilder {
     int depth_bits = 24;
     // Note this reads in linear or sRGB depending on project settings.
     color_render_texture_ = new RenderTexture(resolution, resolution, depth_bits, RenderTargetFormatFromDynamicRange());
-    depth_render_texture_ = new RenderTexture(resolution, resolution, depth_bits, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
+    // One sample per pixel, stated explicitly: this is the target the color
+    // pass resolves into, and both URP and the Built-in pipeline take a
+    // camera's MSAA sample count from its target texture. See
+    // SuppressCameraFiltering() for why a multisampled capture is wrong.
+    color_render_texture_.antiAliasing = 1;
+    color_render_texture_.useDynamicScale = false;
+    // Use RenderTextureDescriptor to avoid the deprecated RenderTextureReadWrite
+    // constructor parameter (obsolete since Unity 2022, warning in Unity 6).
+    var depth_desc_ = new RenderTextureDescriptor(resolution, resolution) {
+      colorFormat   = RenderTextureFormat.ARGBFloat,
+      depthBufferBits = depth_bits,
+      sRGB          = false,   // equivalent to RenderTextureReadWrite.Linear
+      useMipMap     = false,
+      msaaSamples   = 1,
+    };
+    depth_render_texture_ = new RenderTexture(depth_desc_);
     color_render_texture_.autoGenerateMips = false;
     depth_render_texture_.autoGenerateMips = false;
     texture_ = new Texture2D(resolution, resolution, TextureFormat.ARGB32, false);
@@ -525,9 +702,16 @@ public class CaptureBuilder {
   }
 
   private void DestroyRenderTargets() {
-    color_render_texture_.Release();
+    // The targets are also destroyed right after the center sample, to rebuild
+    // them at the lower resolution of the remaining ones, so a capture
+    // cancelled at that point reaches EndCapture() with nothing to release.
+    if (color_render_texture_ != null) {
+      color_render_texture_.Release();
+    }
     color_render_texture_ = null;
-    depth_render_texture_.Release();
+    if (depth_render_texture_ != null) {
+      depth_render_texture_.Release();
+    }
     depth_render_texture_ = null;
     texture_ = null;
     texture_fp16_ = null;

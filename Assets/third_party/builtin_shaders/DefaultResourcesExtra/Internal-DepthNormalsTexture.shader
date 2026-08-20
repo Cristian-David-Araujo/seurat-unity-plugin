@@ -26,6 +26,11 @@
 // * Replace window space depth generation with eye space depth.
 // * Emit depth in single channel; require float precision render target and
 //   readback.
+// NOTE (Unity 6 / URP): This shader intentionally uses CGPROGRAM (Built-in pipeline).
+// It is invoked via Camera.SetReplacementShader(), which is a Built-in pipeline feature
+// that does NOT work in URP. CaptureBuilder.cs automatically handles this by temporarily
+// setting GraphicsSettings.renderPipelineAsset = null during the depth capture pass,
+// then restoring the original SRP asset. No changes to this shader are needed.
 Shader "GoogleVR/Seurat/CaptureEyeDepth" {
 Properties {
 	_MainTex ("", 2D) = "white" {}

@@ -4,6 +4,45 @@ Seurat is a scene simplification technology designed to process very complex 3D 
 
 This document covers how to import Seurat meshes into Unity. To learn more about the Seurat pipeline, visit the main [Seurat GitHub page](https://github.com/googlevr/seurat).
 
+## About this fork
+
+This is a fork of Google's archived capture plugin, kept working against
+**Unity 6 + URP** and matched to the
+[blink-cuda](https://github.com/Cristian-David-Araujo/blink-cuda) fork of the
+Seurat pipeline, where the capture-quality measurements below come from.
+
+**[Assets/SeuratCapture/README-captura-seurat.md](Assets/SeuratCapture/README-captura-seurat.md)
+is the end-to-end guide** (capture settings, the bake command with the measured
+flag values, and the import settings). What changed relative to upstream:
+
+* **URP depth pass.** `Camera.SetReplacementShader` is a Built-in pipeline
+  feature that URP silently ignores, which made the depth camera render color
+  instead of eye depth. The SRP is now switched off for the duration of that one
+  render.
+* **No antialiasing in the capture.** MSAA, FXAA, SMAA and TAA are turned off on
+  the capture camera (`Suppress Antialiasing`, on by default). Seurat treats
+  alpha as binary and bakes each pixel as a point sample at its own depth, so a
+  filtered silhouette pixel paints the near object's colour onto the surface
+  behind it. Measured on blink-cuda's glTF path: 0.48 % of pixels carried a
+  colour belonging to a different surface than their depth, and fixing it moved
+  2.00 % of atlas texels, 3.65x concentrated within one texel of a silhouette.
+* **Bake command in the inspector.** A foldout that prints the `seurat` command
+  line for the current settings, with `-pixels_per_degree` derived from the
+  capture resolution (a cube face spans 90 degrees, so asking for more than
+  `resolution / 90` only turns the surplus atlas into inpainted filler).
+* **Premultiplied-alpha blending fixed** in both SubShaders of
+  `AlphaBlended.shader` (Seurat's atlas is premultiplied unless baked with
+  `-premultiply_alpha=false`, so `Blend One OneMinusSrcAlpha` is the correct
+  blend -- not the `SrcAlpha OneMinusSrcAlpha` the sections below still
+  describe), plus `Seurat/AlphaBlendedLinearCorrect` for the straight-alpha
+  atlas a Linear color space project wants.
+* **`SeuratProxy` layer**: objects on it render into depth only, so an opaque
+  mesh can stand in for geometry that cannot write eye depth.
+* **Headless capture** through `SeuratBatchCapture.Run`.
+* Unity 6 editor API updates, a progress window that can always be dismissed,
+  and headbox samples sorted by distance to the headbox rather than to the world
+  origin.
+
 ## Introduction
 
 This document is organized into two sections. The first describes the steps to

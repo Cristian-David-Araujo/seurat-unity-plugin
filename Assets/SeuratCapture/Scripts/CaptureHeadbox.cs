@@ -1,4 +1,4 @@
-﻿/*
+/*
 Copyright 2017 Google Inc. All Rights Reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
@@ -57,7 +57,7 @@ public enum CaptureDynamicRange {
   kHDR = 2,
 }
 
-[ExecuteInEditMode]
+[ExecuteAlways]
 [RequireComponent(typeof(Camera))]
 public class CaptureHeadbox : MonoBehaviour {
   // -- Capture Settings --
@@ -73,6 +73,12 @@ public class CaptureHeadbox : MonoBehaviour {
 
   [Tooltip("Capture in standard (SDR) or high dynamic range (HDR). HDR requires floating-point render targets, the Camera Component have allow HDR enabled, and enables EXR output.")]
   public CaptureDynamicRange dynamic_range_ = CaptureDynamicRange.kSDR;
+
+  [Tooltip("Renders the capture with multisampling and post-process antialiasing (FXAA/SMAA/TAA) turned off. Keep this enabled: Seurat treats alpha as binary and bakes every pixel as a point sample at its own depth, so a filtered silhouette pixel paints the near object's colour onto the surface behind it, and the object comes out outlined on that surface.")]
+  public bool suppress_camera_antialiasing_ = true;
+
+  [Tooltip("Also turns the camera's post-processing stack off during the capture. Bloom and similar effects spread a bright object's colour across its silhouette, which is the same defect antialiasing causes; leave this off only if you want the post-processed look baked into the atlas.")]
+  public bool suppress_camera_post_processing_ = false;
 
   // -- Processing Settings --
 
@@ -99,9 +105,11 @@ public class CaptureHeadbox : MonoBehaviour {
       RunCapture();
     }
 
+#if ENABLE_LEGACY_INPUT_MANAGER
     if (Input.GetKeyDown(KeyCode.BackQuote)) {
       ToggleCaptureMode();
     }
+#endif
   }
 
   bool IsCapturing() {
@@ -130,7 +138,11 @@ public class CaptureHeadbox : MonoBehaviour {
 
     string capture_output_folder = output_folder_;
     if (capture_output_folder.Length <= 0) {
-      capture_output_folder = FileUtil.GetUniqueTempPathInProject();
+#if UNITY_EDITOR
+      capture_output_folder = UnityEditor.FileUtil.GetUniqueTempPathInProject();
+#else
+      capture_output_folder = Path.Combine(Application.temporaryCachePath, Guid.NewGuid().ToString());
+#endif
     }
     Directory.CreateDirectory(capture_output_folder);
     capture_.BeginCapture(this, capture_output_folder, 1, new CaptureStatus());
