@@ -280,6 +280,16 @@ public class CaptureBuilder {
     depth_camera_.clearFlags = CameraClearFlags.Color;
     depth_camera_.backgroundColor = new Color(0f, 0f, 0f, 0f);
 
+    // Objects on the "SeuratProxy" layer are depth-only stand-ins (e.g. an
+    // opaque mesh aligned to a gaussian splat, which cannot write depth in
+    // the replacement-shader pass). Hide them from color, keep them in depth.
+    // The color camera's mask is restored after the capture (see below).
+    int proxy_layer = LayerMask.NameToLayer("SeuratProxy");
+    if (proxy_layer >= 0) {
+      color_camera_.cullingMask &= ~(1 << proxy_layer);
+      depth_camera_.cullingMask |= (1 << proxy_layer);
+    }
+
     CaptureSample();
 
     color_camera_.ResetReplacementShader();
@@ -460,17 +470,26 @@ public class CaptureBuilder {
 
     // Write out depth data
     string depth_image_name = base_image_name + "_Depth.exr";
-    // depth_camera_ is a standalone Camera created by CaptureBuilder with
-    // no UniversalAdditionalCameraData component. Unity's URP only manages
-    // cameras that carry that component; calling camera.Render() directly on
-    // a bare Camera bypasses the SRP loop and runs the built-in immediate-mode
-    // render path. This is exactly the same mechanism Unity uses for lightmap
-    // baking and reflection probe captures inside URP projects.
-    // SetReplacementShader therefore works correctly here in all pipelines.
-    depth_camera_.SetReplacementShader(render_depth_shader_, "RenderType");
-    depth_camera_.targetTexture = depth_render_texture_;
-    depth_camera_.Render();
-    depth_camera_.ResetReplacementShader();
+    // Camera.SetReplacementShader is a Built-in pipeline feature; URP ignores
+    // it and renders the normal color pass instead. Temporarily disable the
+    // SRP so the depth camera renders through the Built-in path with the
+    // CaptureEyeDepth replacement shader (which replaces every material by
+    // RenderType tag, so URP materials never execute and cannot break).
+    UnityEngine.Rendering.RenderPipelineAsset previous_default_pipeline =
+      UnityEngine.Rendering.GraphicsSettings.defaultRenderPipeline;
+    UnityEngine.Rendering.RenderPipelineAsset previous_quality_pipeline =
+      QualitySettings.renderPipeline;
+    UnityEngine.Rendering.GraphicsSettings.defaultRenderPipeline = null;
+    QualitySettings.renderPipeline = null;
+    try {
+      depth_camera_.SetReplacementShader(render_depth_shader_, "RenderType");
+      depth_camera_.targetTexture = depth_render_texture_;
+      depth_camera_.Render();
+      depth_camera_.ResetReplacementShader();
+    } finally {
+      UnityEngine.Rendering.GraphicsSettings.defaultRenderPipeline = previous_default_pipeline;
+      QualitySettings.renderPipeline = previous_quality_pipeline;
+    }
     WriteImage(depth_render_texture_, texture_fp32_, PathCombine(export_path, depth_image_name), false);
 
     // Record the capture results.

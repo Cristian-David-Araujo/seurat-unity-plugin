@@ -135,7 +135,7 @@ public class CaptureHeadbox : MonoBehaviour {
 #if UNITY_EDITOR
       capture_output_folder = UnityEditor.FileUtil.GetUniqueTempPathInProject();
 #else
-      capture_output_folder = Application.temporaryCachePath;
+      capture_output_folder = Path.Combine(Application.temporaryCachePath, Guid.NewGuid().ToString());
 #endif
     }
     Directory.CreateDirectory(capture_output_folder);

@@ -123,6 +123,10 @@ class CaptureWindow : EditorWindow
     if (bake_stage_ == BakeStage.kWaitForDoneButton) {
       if (GUILayout.Button("Done")) {
         bake_stage_ = BakeStage.kComplete;
+        // Close immediately instead of waiting for the headbox inspector to
+        // poll IsComplete(); OnInspectorGUI only runs while that inspector is
+        // visible and repainting, so the window would otherwise hang around.
+        Close();
       }
     }
   }
@@ -147,13 +151,19 @@ class CaptureWindow : EditorWindow
 
   public void Update()
   {
-    if (capture_status_ != null && capture_status_.TaskContinuing() && !UpdateAndCheckUiTimerReady()) {
+    // Non-serialized references do not survive a domain reload (script
+    // recompilation); without them this window can never make progress or be
+    // dismissed, so shut it down.
+    if (bake_stage_ == BakeStage.kCapture &&
+        (capture_notification_component_ == null || monitored_capture_ == null)) {
+      bake_stage_ = BakeStage.kComplete;
+      Close();
       return;
     }
 
-    // Mark the scene dirty so Unity 6 correctly tracks unsaved changes.
-    // EditorUtility.SetDirty is not reliable for scene objects since Unity 2019+.
-    EditorSceneManager.MarkSceneDirty(capture_notification_component_.gameObject.scene);
+    if (capture_status_ != null && capture_status_.TaskContinuing() && !UpdateAndCheckUiTimerReady()) {
+      return;
+    }
 
     if (bake_stage_ == BakeStage.kCapture)
     {
@@ -169,6 +179,11 @@ class CaptureWindow : EditorWindow
           monitored_capture_.EndCapture();
           monitored_capture_ = null;
 
+          // Persist last_output_dir_ on the headbox now that the capture is
+          // done. EditorUtility.SetDirty is not reliable for scene objects
+          // since Unity 2019+, and marking dirty every tick stalls the editor.
+          EditorSceneManager.MarkSceneDirty(capture_notification_component_.gameObject.scene);
+
           bake_stage_ = BakeStage.kWaitForDoneButton;
         }
       }
@@ -180,6 +195,7 @@ class CaptureWindow : EditorWindow
           monitored_capture_.EndCapture();
           monitored_capture_ = null;
         }
+        Close();
       }
     }
 
@@ -263,6 +279,11 @@ public class CaptureHeadboxEditor : Editor {
       bake_progress_window_ = null;
       capture_builder_ = null;
       capture_status_ = null;
+    } else if (bake_progress_window_ == null && capture_status_ != null) {
+      // The window is already gone (Done button, manual close, or domain
+      // reload). Release the capture state so the Capture button unlocks.
+      capture_builder_ = null;
+      capture_status_ = null;
     }
   }
 
@@ -274,6 +295,7 @@ public class CaptureHeadboxEditor : Editor {
       capture_output_folder = FileUtil.GetUniqueTempPathInProject();
     }
     headbox.last_output_dir_ = capture_output_folder;
+    EditorSceneManager.MarkSceneDirty(headbox.gameObject.scene);
     Directory.CreateDirectory(capture_output_folder);
 
     capture_status_ = new EditorBakeStatus();

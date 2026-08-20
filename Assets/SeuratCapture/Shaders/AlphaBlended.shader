@@ -31,7 +31,7 @@ Shader "GoogleVR/Seurat/AlphaBlended"
 		Blend One OneMinusSrcAlpha
 		Cull Off
 		ZWrite Off
-		ZTest Always
+		ZTest LEqual
 		Pass
 		{
 			Name "Forward"
